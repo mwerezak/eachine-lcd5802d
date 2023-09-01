@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 	from typing import Optional
 
 
-FFMPEG_PATH = R'ffmpeg.exe'
+FFMPEG_PATH = R'ffmpeg'
 
 cli = ArgumentParser(
 	description="Process recorded DVR footage from Eachine LCD5802D FPV receiver."
@@ -37,7 +37,7 @@ cli.add_argument(
 cli.add_argument(
 	'--ffmpeg-path',
 	default = FFMPEG_PATH,
-	help = "Path to ffmpeg executable.",
+	help = "Path to the FFmpeg executable.",
 	metavar = "PATH",
 	dest = 'ffmpeg_path',
 )
@@ -113,7 +113,8 @@ def join_and_compress_video(
 				ffmpeg_path, '-y', 
 				'-i', input_path,
 				'-threads', '8',
-				'-acodec', 'copy',
+				'-acodec', 'copy',  # it's already PCM
+				#'-acodec', 'pcm_s16le', '-ac', '1', '-ar', '8000',
 				'-vcodec', 'ffv1', '-level', '3', '-coder', '1', '-context', '1', '-g', '1', '-slices', '24', '-slicecrc', '1',
 				segment_path,
 			]
@@ -127,13 +128,17 @@ def join_and_compress_video(
 		temp_path = os.path.join(tempdir, 'concat.mkv')
 
 		concat_cmd = [
-			ffmpeg_path, '-y', '-f', 'concat', '-safe', '0', '-i', manifest_path, '-c', 'copy', temp_path,
+			ffmpeg_path, '-y',
+			'-f', 'concat', '-safe', '0', '-i', manifest_path,
+			'-acodec', 'copy',
+			'-vcodec', 'copy',
+			temp_path,
 		]
 		subprocess.run(concat_cmd, check=True)
 
 		encode_cmd = [
 			ffmpeg_path, '-y', '-i', temp_path,
-			'-acodec', 'aac', '-channels', '1', '-ar', '8000', '-aq', '1',
+			'-acodec', 'aac', '-aq', '1', '-ac', '1', '-ar', '8000',
 			'-vcodec', 'libx264', '-preset', 'medium', '-crf', '23', '-vprofile', 'high422', '-g', '150', '-bf', '3', '-pix_fmt', 'yuv420p',
 			'-movflags', '+faststart',
 			output_path,
@@ -181,7 +186,13 @@ if __name__ == '__main__':
 
 	input_files = [ video_files[idx] for idx in range(start, end+1) ]
 
+	print('*** Eachine LCD5802D Video Extractor ***')
+	print(f"FFMPEG path:\n  '{args.ffmpeg_path}'")
+	print(f"Input:" + ''.join(f"\n  '{path}'" for path in input_files))
+	print(f"Output:\n  '{args.output}'")
+
 	start_time = datetime.now()
 	join_and_compress_video(args.ffmpeg_path, input_files, args.output)
 	elapsed = datetime.now() - start_time
-	print(f"Finished processing, elapsed {elapsed}")
+
+	print(f"Finished processing in {elapsed}")
