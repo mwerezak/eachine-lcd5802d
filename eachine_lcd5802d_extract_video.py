@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from datetime import datetime
 from tempfile import TemporaryDirectory
 from argparse import ArgumentParser
 from enum import Enum
@@ -13,29 +14,6 @@ if TYPE_CHECKING:
 
 
 FFMPEG_PATH = R'ffmpeg.exe'
-
-COMPRESSION_PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']
-
-class VideoCodec(Enum):
-	H264 = ('libx264', 22)
-	H265 = ('libx265', 28)
-
-	@property
-	def codec(self) -> str:
-		return self.value[0]
-
-	@property
-	def default_crf(self) -> int:
-		return self.value[1]
-	
-
-class AudioCodec(Enum):
-	AAC = 'aac'
-	AC3 = 'ac3'
-
-	@property
-	def codec(self) -> str:
-		return self.value
 
 cli = ArgumentParser(
 	description="Process recorded DVR footage from Eachine LCD5802D FPV receiver."
@@ -62,50 +40,6 @@ cli.add_argument(
 	help = "Path to ffmpeg executable.",
 	metavar = "PATH",
 	dest = 'ffmpeg_path',
-)
-# cli.add_argument(
-# 	'-L', '--compression-level',
-# 	type = int,
-# 	default = None,
-# 	help = "Compression level. Defaults to 22 for h.264 and 28 for h.265.",
-# 	metavar = "LEVEL",
-# 	dest = 'compression',
-# )
-# cli.add_argument(
-# 	'--compression-preset',
-# 	default = 'medium',
-# 	choices = COMPRESSION_PRESETS,
-# 	help = (
-# 		"The preset determines compression efficiency and therefore affects encoding speed. "
-# 		"Valid presets are 'ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', and 'veryslow'. "
-# 		"Use the slowest preset you have patience for."
-# 	),
-# 	metavar = "PRESET",
-# 	dest = 'preset',
-# )
-# cli.add_argument(
-# 	'--video-codec',
-# 	default = VideoCodec.H265.name.casefold(),
-# 	type = lambda s: s.casefold(),
-# 	choices = list(codec.name.casefold() for codec in VideoCodec),
-# 	help = "The video codec to use.",
-# 	metavar = "CODEC",
-# 	dest = 'video_codec',
-# )
-# cli.add_argument(
-# 	'--audio-codec',
-# 	default = AudioCodec.AAC.name.casefold(),
-# 	type = lambda s: s.casefold(),
-# 	choices = list(codec.name.casefold() for codec in AudioCodec),
-# 	help = "The audio codec to use.",
-# 	metavar = "CODEC",
-# 	dest = 'audio_codec',
-# )
-# cli.add_argument(
-# 	'-C', '--compat-mode',
-# 	action = 'store_true',
-# 	help = "Force compatiblity settings for video encoding.",
-# 	dest = 'compatibility_mode',
 )
 
 def dvr_filename(index: int) -> str:
@@ -162,107 +96,49 @@ def parse_range(s: str) -> tuple[Optional[int], Optional[int]]:
 
 	return start, end
 
-def join_and_compress_videos(
+def join_and_compress_video(
 		ffmpeg_path: str, 
 		input_paths: list[str], 
 		output_path: str, 
-		*, 
-		compression: Optional[int] = None, 
-		preset: str = 'faster', 
-		video_codec: VideoCodec = VideoCodec.H265, 
-		audio_codec: AudioCodec = AudioCodec.AAC,
-		compatibility_mode: bool = False,
 	) -> None:
 
-	if compression is None:
-		compression = video_codec.default_crf
-
 	with TemporaryDirectory() as tempdir:
-		# pad audio to avoid desync with video
-		#ffmpeg -i segment1.mov -af apad -c:v copy <audio encoding params> -shortest -avoid_negative_ts make_zero -fflags +genpts padded1.mo
+		# convert each segment to intermediate codec for better concatenation
 		segment_paths = []
 		for idx, input_path in enumerate(input_paths):
-			segment_path = os.path.join(tempdir, f'segment{idx:03d}.avi')
+			segment_path = os.path.join(tempdir, f'segment{idx:03d}.mkv')
 			segment_paths.append(segment_path)
 
-			pad_cmd = [
-				ffmpeg_path, '-y', '-i', input_path, '-af', 'apad', '-c:v', 'copy', '-c:a', audio_codec.value, 
-				'-shortest', '-avoid_negative_ts', 'make_zero', '-fflags', '+genpts', segment_path,
+			segment_cmd = [
+				ffmpeg_path, '-y', 
+				'-i', input_path,
+				'-threads', '8',
+				'-acodec', 'copy',
+				'-vcodec', 'ffv1', '-level', '3', '-coder', '1', '-context', '1', '-g', '1', '-slices', '24', '-slicecrc', '1',
+				segment_path,
 			]
-			subprocess.run(pad_cmd, check=True)
+			subprocess.run(segment_cmd, check=True)
 
 		manifest_path = os.path.join(tempdir, 'concat.txt')
 		with open(manifest_path, 'wt') as f:
 			for path in segment_paths:
 				f.write(f"file '{path}'\r\n")
 
-		temp_path = os.path.join(tempdir, 'concat.avi')
+		temp_path = os.path.join(tempdir, 'concat.mkv')
 
 		concat_cmd = [
 			ffmpeg_path, '-y', '-f', 'concat', '-safe', '0', '-i', manifest_path, '-c', 'copy', temp_path,
 		]
 		subprocess.run(concat_cmd, check=True)
 
-		extra_encode_args = ()
-		if compatibility_mode:
-			video_codec = VideoCodec.H264
-			extra_encode_args = ['-profile:v', 'baseline', '-level', '3.0', '-pix_fmt', 'yuv420p']
-			#-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p
-
 		encode_cmd = [
-			ffmpeg_path, '-y', '-i', temp_path, 
-			'-c:a', 'copy',
-			'-c:v', video_codec.value,
-			*extra_encode_args,
-			'-crf', str(compression), 
-			'-preset', preset, 
+			ffmpeg_path, '-y', '-i', temp_path,
+			'-acodec', 'aac', '-channels', '1', '-ar', '8000', '-aq', '1',
+			'-vcodec', 'libx264', '-preset', 'medium', '-crf', '23', '-vprofile', 'high422', '-g', '150', '-bf', '3', '-pix_fmt', 'yuv420p',
+			'-movflags', '+faststart',
 			output_path,
 		]
 		subprocess.run(encode_cmd, check=True)
-
-
-# def join_and_compress_avi(
-# 		ffmpeg_path: str, input_paths: list[str], output_path: str, *, 
-# 		compression: Optional[int] = None, 
-# 		preset: str = 'faster', 
-# 		video_codec: VideoCodec = VideoCodec.H265, 
-# 		audio_codec: AudioCodec = AudioCodec.AAC,
-# 		compatibility_mode: bool = False,
-# 	) -> None:
-	
-# 	if compression is None:
-# 		compression = video_codec.default_crf
-
-# 	extra_encode_args = ()
-# 	if compatibility_mode:
-# 		video_codec = VideoCodec.H264
-# 		extra_encode_args = ['-profile:v', 'baseline', '-level', '3.0', '-pix_fmt', 'yuv420p']
-# 		#-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p
-
-
-# 	with TemporaryDirectory() as tempdir:
-# 		segment_paths = []
-# 		for idx, input_path in enumerate(input_paths):
-# 			segment_path = os.path.abspath(os.path.join(tempdir, f'segment{idx:d}.avi'))
-# 			segment_paths.append(segment_path)
-
-# 			encode_cmd = [
-# 				ffmpeg_path, '-y', '-i', input_path, '-af', 'apad',
-# 				'-c:a', audio_codec.codec, '-shortest', '-avoid_negative_ts', 'make_zero', '-fflags', '+genpts',  # pad audio to avoid desync with video
-# 				'-c:v', video_codec.codec, *extra_encode_args, '-crf', str(compression), '-preset', preset,
-# 				segment_path,
-# 			]
-# 			subprocess.run(encode_cmd, check=True)
-
-# 		manifest_path = os.path.join(tempdir, 'concat.txt')
-# 		with open(manifest_path, 'wt') as f:
-# 			for path in segment_paths:
-# 				f.write(f"file '{path}'\r\n")
-
-# 		concat_cmd = [
-# 			ffmpeg_path, '-y', '-f', 'concat', '-safe', '0', '-i', manifest_path, '-c', 'copy', output_path,
-# 		]
-# 		subprocess.run(concat_cmd, check=True)
 
 if __name__ == '__main__':
 	import sys
@@ -303,15 +179,9 @@ if __name__ == '__main__':
 			print(dvr_filename(idx))
 		sys.exit()
 
-	vcodecs = { codec.name.casefold() : codec for codec in VideoCodec }
-	acodecs = { codec.name.casefold() : codec for codec in AudioCodec }
-
 	input_files = [ video_files[idx] for idx in range(start, end+1) ]
-	join_and_compress_avi(
-		args.ffmpeg_path, input_files, args.output, 
-		compression = args.compression,
-		preset = args.preset,
-		video_codec = vcodecs[args.video_codec],
-		audio_codec = acodecs[args.audio_codec],
-		compatibility_mode = args.compatibility_mode,
-	)
+
+	start_time = datetime.now()
+	join_and_compress_video(args.ffmpeg_path, input_files, args.output)
+	elapsed = datetime.now() - start_time
+	print(f"Finished processing, elapsed {elapsed}")
