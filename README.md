@@ -39,4 +39,3 @@ The `START:END` range is **inclusive** so 0:2 would join `PICT0000.AVI`, `PICT00
 The name of the video file to output. 
 You can choose whatever file extension you want (.mkv, .mp4, whatever) and I believe that FFmpeg will produce the corresponding container.
 Regardless of container the encoding will be H.264/AAC.
-
