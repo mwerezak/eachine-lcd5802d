@@ -23,19 +23,19 @@ This is a Python script, so you will need an interpreter. It has been developed 
 eachine_lcd5802d_extract_video.py INPUT START:END OUTPUT
 ```
 
-### `INPUT`
+### INPUT
 You will need to tell the tool the path where it can find the DCIM folder containing the DVR recordings. 
 Typically this is the root of the SD card where the video recordings were saved.
 So for the `INPUT` parameter you can just put the path to where your SD card is mounted. 
 On windows this would be just e.g. `D:\` or whatever.
 
-### `START:END`
+### START:END
 On the SD card the LCD5802D stores video recordings with filenames in the form of `PICTnnnn.AVI` where `nnnn` is a number.
 Use these numbers to specify which video segments you want to join into a single output video file.
 
-The `START:END` range is **inclusive** so 0:2 would join `PICT0000.AVI`, `PICT0001.AVI`, and `PICT0002.AVI` into a single video.
+The `START:END` range is *inclusive* so 0:2 would join `PICT0000.AVI`, `PICT0001.AVI`, and `PICT0002.AVI` into a single video.
 
-### `OUTPUT`
+### OUTPUT
 The name of the video file to output. 
 You can choose whatever file extension you want (.mkv, .mp4, whatever) and I believe that FFmpeg will produce the corresponding container.
 Regardless of container the encoding will be H.264/AAC.
