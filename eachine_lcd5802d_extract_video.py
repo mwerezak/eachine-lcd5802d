@@ -96,54 +96,65 @@ def parse_range(s: str) -> tuple[Optional[int], Optional[int]]:
 
 	return start, end
 
-def join_and_compress_video(
-		ffmpeg_path: str, 
-		input_paths: list[str], 
-		output_path: str, 
-	) -> None:
+class VideoProcessor:
+	def __init__(self, ffmpeg_path: str):
+		self._ffmpeg = ffmpeg_path
 
-	with TemporaryDirectory() as tempdir:
-		# convert each segment to intermediate codec for better concatenation
+	def _convert_segments(self, input_paths: list[str], output_path: str) -> list[str]:
 		segment_paths = []
 		for idx, input_path in enumerate(input_paths):
-			segment_path = os.path.join(tempdir, f'segment{idx:03d}.mkv')
+			segment_path = os.path.join(output_path, f'segment{idx:03d}.mkv')
 			segment_paths.append(segment_path)
 
 			segment_cmd = [
-				ffmpeg_path, '-y', 
+				self._ffmpeg, '-y', 
 				'-i', input_path,
 				'-threads', '8',
 				'-acodec', 'copy',  # it's already PCM
 				#'-acodec', 'pcm_s16le', '-ac', '1', '-ar', '8000',
 				'-vcodec', 'ffv1', '-level', '3', '-coder', '1', '-context', '1', '-g', '1', '-slices', '24', '-slicecrc', '1',
+				'-t', '5:00',
 				segment_path,
 			]
 			subprocess.run(segment_cmd, check=True)
+		return segment_paths
 
-		manifest_path = os.path.join(tempdir, 'concat.txt')
-		with open(manifest_path, 'wt') as f:
-			for path in segment_paths:
-				f.write(f"file '{path}'\r\n")
+	def _concat_segments(self, input_paths: list[str], output_path: str) -> None:
+		with TemporaryDirectory() as tempdir:
+			manifest_path = os.path.join(tempdir, 'concat.txt')
+			with open(manifest_path, 'wt') as f:
+				for path in input_paths:
+					f.write(f"file '{path}'\r\n")
 
-		temp_path = os.path.join(tempdir, 'concat.mkv')
+			concat_cmd = [
+				self._ffmpeg, '-y',
+				'-f', 'concat', '-safe', '0', '-i', manifest_path,
+				'-acodec', 'copy',
+				'-vcodec', 'copy',
+				'-max_interleave_delta', '0',
+				output_path,
+			]
+			subprocess.run(concat_cmd, check=True)
 
-		concat_cmd = [
-			ffmpeg_path, '-y',
-			'-f', 'concat', '-safe', '0', '-i', manifest_path,
-			'-acodec', 'copy',
-			'-vcodec', 'copy',
-			temp_path,
-		]
-		subprocess.run(concat_cmd, check=True)
-
+	def _encode_output(self, input_path: str, output_path: str) -> None:
 		encode_cmd = [
-			ffmpeg_path, '-y', '-i', temp_path,
+			self._ffmpeg, '-y', '-i', input_path,
 			'-acodec', 'aac', '-aq', '1', '-ac', '1', '-ar', '8000',
 			'-vcodec', 'libx264', '-preset', 'medium', '-crf', '23', '-vprofile', 'high422', '-g', '150', '-bf', '3', '-pix_fmt', 'yuv420p',
 			'-movflags', '+faststart',
 			output_path,
 		]
 		subprocess.run(encode_cmd, check=True)
+
+	def join_and_compress_video(self, input_paths: list[str], output_path: str) -> None:
+		with TemporaryDirectory() as tempdir:
+			segment_paths = self._convert_segments(input_paths, tempdir)
+
+			temp_path = os.path.join(tempdir, 'concat.mkv')
+			self._concat_segments(segment_paths, temp_path)
+
+			self._encode_output(temp_path, output_path)
+
 
 if __name__ == '__main__':
 	import sys
@@ -192,7 +203,7 @@ if __name__ == '__main__':
 	print(f"Output:\n  '{args.output}'")
 
 	start_time = datetime.now()
-	join_and_compress_video(args.ffmpeg_path, input_files, args.output)
+	VideoProcessor(args.ffmpeg_path).join_and_compress_video(input_files, args.output)
 	elapsed = datetime.now() - start_time
 
 	print(f"Finished processing in {elapsed}")
