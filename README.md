@@ -33,7 +33,7 @@ On windows this would be just e.g. `D:\` or whatever.
 On the SD card the LCD5802D stores video recordings with filenames in the form of `PICTnnnn.AVI` where `nnnn` is a number.
 Use these numbers to specify which video segments you want to join into a single output video file.
 
-The `START:END` range is *inclusive* so 0:2 would join `PICT0000.AVI`, `PICT0001.AVI`, and `PICT0002.AVI` into a single video.
+The `START:END` range is *inclusive* so `0:2` would join `PICT0000.AVI`, `PICT0001.AVI`, and `PICT0002.AVI` into a single video.
 
 ### OUTPUT
 The name of the video file to output. 
